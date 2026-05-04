@@ -105,7 +105,7 @@ Logs:
 ~/Library/Application Support/Codex Pet Ring Overlay/overlay.err.log
 ```
 
-The uninstall script unloads the LaunchAgent and removes the plist and installed binary. It leaves log files behind if the Application Support directory is not empty.
+The uninstall script unloads the LaunchAgent and removes the plist, installed binary, and app logs. If the Application Support directory contains unrelated files, the directory itself is left in place.
 
 ## Options
 

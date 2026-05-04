@@ -132,7 +132,13 @@ final class RateLimitReader {
                     guard let result = message["result"] as? [String: Any] else {
                         throw OverlayError.appServer("Codex app-server returned a malformed rate-limit result.")
                     }
-                    return try RateLimitSnapshotParser.parseUsageRings(from: result, limitID: limitID)
+                    do {
+                        return try RateLimitSnapshotParser.parseUsageRings(from: result, limitID: limitID)
+                    } catch {
+                        throw OverlayError.appServer(
+                            "\(error) Response shape: \(Self.rateLimitResponseShapeDescription(result, limitID: limitID))"
+                        )
+                    }
                 }
             }
         }
@@ -167,5 +173,35 @@ final class RateLimitReader {
         let data = try JSONSerialization.data(withJSONObject: object)
         handle.write(data)
         handle.write(Data([0x0A]))
+    }
+
+    private static func rateLimitResponseShapeDescription(_ result: [String: Any], limitID: String) -> String {
+        let topLevelKeys = result.keys.sorted().joined(separator: ",")
+        let rateLimitsKeys = dictionaryKeys(result["rateLimits"])
+        let selectedLimitKeys: String
+        let primaryKeys: String
+        let secondaryKeys: String
+
+        if
+            let byLimitID = result["rateLimitsByLimitId"] as? [String: Any],
+            let selectedLimit = byLimitID[limitID] as? [String: Any]
+        {
+            selectedLimitKeys = selectedLimit.keys.sorted().joined(separator: ",")
+            primaryKeys = dictionaryKeys(selectedLimit["primary"])
+            secondaryKeys = dictionaryKeys(selectedLimit["secondary"])
+        } else {
+            selectedLimitKeys = ""
+            primaryKeys = dictionaryKeys((result["rateLimits"] as? [String: Any])?["primary"])
+            secondaryKeys = dictionaryKeys((result["rateLimits"] as? [String: Any])?["secondary"])
+        }
+
+        return "topLevel=[\(topLevelKeys)] rateLimits=[\(rateLimitsKeys)] selectedLimit=[\(selectedLimitKeys)] primary=[\(primaryKeys)] secondary=[\(secondaryKeys)]"
+    }
+
+    private static func dictionaryKeys(_ value: Any?) -> String {
+        guard let dictionary = value as? [String: Any] else {
+            return ""
+        }
+        return dictionary.keys.sorted().joined(separator: ",")
     }
 }

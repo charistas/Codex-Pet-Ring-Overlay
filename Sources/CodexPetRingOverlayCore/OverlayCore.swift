@@ -112,16 +112,16 @@ public enum NumericValueParser {
     public static func optionalDouble(_ value: Any?) -> Double? {
         let number: Double?
         switch value {
-        case is Bool:
-            number = nil
-        case let value as Double:
-            number = value
-        case let value as Int:
-            number = Double(value)
         case let value as NSNumber where CFGetTypeID(value) == CFBooleanGetTypeID():
             number = nil
         case let value as NSNumber:
             number = value.doubleValue
+        case let value as Double:
+            number = value
+        case let value as Int:
+            number = Double(value)
+        case is Bool:
+            number = nil
         case let value as String:
             number = Double(value)
         default:

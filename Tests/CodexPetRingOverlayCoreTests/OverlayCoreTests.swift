@@ -50,6 +50,31 @@ final class OverlayCoreTests: XCTestCase {
         XCTAssertEqual(usage.longWindow.usageLevel, .high)
     }
 
+    func testParseUsageRingsAcceptsJSONSerializedNumericFields() throws {
+        let data = """
+        {
+          "rateLimitsByLimitId": {
+            "codex": {
+              "primary": {
+                "windowDurationMins": 300,
+                "usedPercent": 1
+              },
+              "secondary": {
+                "windowDurationMins": 10080,
+                "usedPercent": 89
+              }
+            }
+          }
+        }
+        """.data(using: .utf8)!
+        let response = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        let usage = try RateLimitSnapshotParser.parseUsageRings(from: response, limitID: "codex")
+
+        XCTAssertEqual(usage.shortWindow.usedPercent, 1)
+        XCTAssertEqual(usage.longWindow.usedPercent, 89)
+    }
+
     func testParseUsageRingsRejectsMissingRequestedLimitID() {
         let response: [String: Any] = [
             "rateLimitsByLimitId": [
