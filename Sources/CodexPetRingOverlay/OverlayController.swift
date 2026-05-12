@@ -3,6 +3,12 @@ import CodexPetRingOverlayCore
 import CoreGraphics
 
 final class OverlayController {
+    private enum WindowAlignmentMode: Equatable {
+        case mascotBounds
+        case wholeWindowNoMascot
+        case wholeWindowUncorrelatedMascot
+    }
+
     private enum UsageRefreshPolicy {
         static let visibleInterval: TimeInterval = 60
         static let hiddenInterval: TimeInterval = 5 * 60
@@ -30,6 +36,8 @@ final class OverlayController {
     private var stablePositionPolls = 0
     private var lastSuccessfulUsage: UsageRings?
     private var lastMascotBounds: MascotBounds?
+    private var lastAlignmentMode: WindowAlignmentMode?
+    private var accessibilityDisplayOptionsObserver: NSObjectProtocol?
 
     init(codexHome: URL, codexBinaryURL: URL, limitID: String) {
         stateReader = CodexStateReader(codexHome: codexHome)
@@ -54,14 +62,33 @@ final class OverlayController {
         window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.floatingWindow)) + 2)
     }
 
+    deinit {
+        if let accessibilityDisplayOptionsObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(accessibilityDisplayOptionsObserver)
+        }
+    }
+
     func start() {
         NSApp.setActivationPolicy(.accessory)
+        observeAccessibilityDisplayOptions()
         updateWindowPosition()
         if !isPetVisible {
             scheduleUsageRefresh(after: UsageRefreshPolicy.hiddenInterval)
         }
 
         scheduleTracking()
+    }
+
+    private func observeAccessibilityDisplayOptions() {
+        guard accessibilityDisplayOptionsObserver == nil else { return }
+
+        accessibilityDisplayOptionsObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.ringView.animatesChanges = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        }
     }
 
     private func scheduleTracking() {
@@ -172,19 +199,22 @@ final class OverlayController {
             window.orderOut(nil)
             lastWindowFrame = nil
             stablePositionPolls = 0
+            lastAlignmentMode = nil
             return
         }
 
         let mascotRect: CGRect
-        if let mascot = selectionMascot {
+        if codexWindow.isMascotCorrelated, let mascot = selectionMascot {
+            setAlignmentMode(.mascotBounds)
             mascotRect = CGRect(
-                x: codexWindow.minX + mascot.left,
-                y: codexWindow.minY + mascot.top,
+                x: codexWindow.bounds.minX + mascot.left,
+                y: codexWindow.bounds.minY + mascot.top,
                 width: mascot.width,
                 height: mascot.height
             )
         } else {
-            mascotRect = codexWindow
+            setAlignmentMode(selectionMascot == nil ? .wholeWindowNoMascot : .wholeWindowUncorrelatedMascot)
+            mascotRect = codexWindow.bounds
         }
 
         let diameter = max(mascotRect.width, mascotRect.height) + 64
@@ -229,7 +259,21 @@ final class OverlayController {
         }
     }
 
-    private func findCodexAvatarWindow(mascot: MascotBounds?) -> CGRect? {
+    private func setAlignmentMode(_ mode: WindowAlignmentMode) {
+        guard mode != lastAlignmentMode else { return }
+        lastAlignmentMode = mode
+
+        switch mode {
+        case .mascotBounds:
+            NSLog("Codex Pet Ring Overlay aligned to Codex avatar bounds.")
+        case .wholeWindowNoMascot:
+            NSLog("Codex Pet Ring Overlay could not read Codex avatar bounds; using the visible Codex overlay window until local state is available.")
+        case .wholeWindowUncorrelatedMascot:
+            NSLog("Codex Pet Ring Overlay ignored stale Codex avatar bounds that do not fit the visible overlay window.")
+        }
+    }
+
+    private func findCodexAvatarWindow(mascot: MascotBounds?) -> AvatarWindowSelection? {
         guard
             let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
         else {
@@ -243,18 +287,25 @@ final class OverlayController {
                 return nil
             }
 
-            let width = Self.number(bounds["Width"])
-            let height = Self.number(bounds["Height"])
-            let rect = CGRect(x: Self.number(bounds["X"]), y: Self.number(bounds["Y"]), width: width, height: height)
+            guard
+                let x = Self.number(bounds["X"]),
+                let y = Self.number(bounds["Y"]),
+                let width = Self.number(bounds["Width"]),
+                let height = Self.number(bounds["Height"])
+            else {
+                return nil
+            }
+
+            let rect = CGRect(x: x, y: y, width: width, height: height)
             return WindowSnapshot(
                 ownerName: window[kCGWindowOwnerName as String] as? String,
-                layer: window[kCGWindowLayer as String] as? Int,
-                isOnscreen: (window[kCGWindowIsOnscreen as String] as? Int) == 1,
+                layer: Self.integer(window[kCGWindowLayer as String]),
+                isOnscreen: Self.integer(window[kCGWindowIsOnscreen as String]) == 1,
                 bounds: rect
             )
         }
 
-        return CodexWindowSelector.selectAvatarWindow(from: snapshots, mascot: mascot)
+        return CodexWindowSelector.selectAvatarWindowSelection(from: snapshots, mascot: mascot)
     }
 
     private func convertCGWindowRectToAppKitFrame(_ rect: CGRect) -> CGRect? {
@@ -268,12 +319,17 @@ final class OverlayController {
         return WindowGeometryConverter.convertCGWindowRectToAppKitFrame(rect, screens: screens)
     }
 
-    private static func number(_ value: Any?) -> CGFloat {
-        if let value = value as? CGFloat { return value }
-        if let value = value as? Double { return CGFloat(value) }
-        if let value = value as? Int { return CGFloat(value) }
-        if let value = value as? NSNumber { return CGFloat(truncating: value) }
-        if let value = value as? String, let number = Double(value) { return CGFloat(number) }
-        return 0
+    private static func number(_ value: Any?) -> CGFloat? {
+        guard let number = NumericValueParser.optionalDouble(value) else {
+            return nil
+        }
+        return CGFloat(number)
+    }
+
+    private static func integer(_ value: Any?) -> Int? {
+        guard let number = NumericValueParser.optionalDouble(value), number.rounded() == number else {
+            return nil
+        }
+        return Int(number)
     }
 }

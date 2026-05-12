@@ -12,7 +12,7 @@ enum OverlayError: Error, CustomStringConvertible {
         case .appServer(let message):
             return message
         case .missingCodexBinary(let path):
-            return "Codex binary not found: \(path)"
+            return "Codex binary not found or not executable: \(path). Install Codex Desktop in /Applications, put codex on PATH, or pass --codex-bin PATH."
         case .invalidArgument(let message):
             return message
         }
@@ -36,7 +36,11 @@ func parseArguments() throws -> AppOptions {
             codexHome = URL(fileURLWithPath: NSString(string: value).expandingTildeInPath)
         case "--codex-bin":
             let value = try requireValue(for: arg, from: &iterator)
-            codexBinary = URL(fileURLWithPath: NSString(string: value).expandingTildeInPath)
+            let url = URL(fileURLWithPath: NSString(string: value).expandingTildeInPath)
+            guard FileManager.default.isExecutableFile(atPath: url.path) else {
+                throw OverlayError.missingCodexBinary(url.path)
+            }
+            codexBinary = url
         case "--help", "-h":
             print("""
             Codex Pet Ring Overlay \(appVersion)

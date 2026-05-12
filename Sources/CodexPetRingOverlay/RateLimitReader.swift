@@ -34,6 +34,10 @@ final class RateLimitReader {
     }
 
     private func readRateLimits() throws -> UsageRings {
+        guard FileManager.default.isExecutableFile(atPath: codexBinaryURL.path) else {
+            throw OverlayError.missingCodexBinary(codexBinaryURL.path)
+        }
+
         let process = Process()
         process.executableURL = codexBinaryURL
         process.arguments = ["app-server", "--listen", "stdio://"]
@@ -46,7 +50,11 @@ final class RateLimitReader {
         process.standardOutput = outputPipe
         process.standardError = errorPipe
 
-        try process.run()
+        do {
+            try process.run()
+        } catch {
+            throw OverlayError.appServer("Could not start Codex app-server using \(codexBinaryURL.path): \(error.localizedDescription)")
+        }
 
         let input = inputPipe.fileHandleForWriting
         let output = outputPipe.fileHandleForReading
@@ -109,7 +117,7 @@ final class RateLimitReader {
                 guard let line = String(data: lineData, encoding: .utf8), !line.isEmpty else {
                     continue
                 }
-                recentLines.append(line)
+                recentLines.append(JSONLineMessageParser.protocolSummary(from: lineData))
                 recentLines = Array(recentLines.suffix(6))
 
                 guard let message = JSONLineMessageParser.parseObject(from: lineData), let id = message["id"] as? Int else {
@@ -136,7 +144,7 @@ final class RateLimitReader {
                         return try RateLimitSnapshotParser.parseUsageRings(from: result, limitID: limitID)
                     } catch {
                         throw OverlayError.appServer(
-                            "\(error) Response shape: \(Self.rateLimitResponseShapeDescription(result, limitID: limitID))"
+                            "\(error) Response shape: \(RateLimitSnapshotParser.responseShapeDescription(result, limitID: limitID))"
                         )
                     }
                 }
@@ -146,7 +154,7 @@ final class RateLimitReader {
         let phase = initialized ? "account/rateLimits/read" : "Codex app-server initialization"
         let stderr = errorCollector.singleLineText
         let stderrSummary = stderr.isEmpty ? "" : " Stderr: \(stderr)"
-        throw OverlayError.appServer("Timed out waiting for \(phase). Recent output: \(recentLines.joined(separator: " | "))\(stderrSummary)")
+        throw OverlayError.appServer("Timed out waiting for \(phase). Recent output summaries: \(recentLines.joined(separator: " | "))\(stderrSummary)")
     }
 
     private static func stopProcess(_ process: Process) {
@@ -175,33 +183,4 @@ final class RateLimitReader {
         handle.write(Data([0x0A]))
     }
 
-    private static func rateLimitResponseShapeDescription(_ result: [String: Any], limitID: String) -> String {
-        let topLevelKeys = result.keys.sorted().joined(separator: ",")
-        let rateLimitsKeys = dictionaryKeys(result["rateLimits"])
-        let selectedLimitKeys: String
-        let primaryKeys: String
-        let secondaryKeys: String
-
-        if
-            let byLimitID = result["rateLimitsByLimitId"] as? [String: Any],
-            let selectedLimit = byLimitID[limitID] as? [String: Any]
-        {
-            selectedLimitKeys = selectedLimit.keys.sorted().joined(separator: ",")
-            primaryKeys = dictionaryKeys(selectedLimit["primary"])
-            secondaryKeys = dictionaryKeys(selectedLimit["secondary"])
-        } else {
-            selectedLimitKeys = ""
-            primaryKeys = dictionaryKeys((result["rateLimits"] as? [String: Any])?["primary"])
-            secondaryKeys = dictionaryKeys((result["rateLimits"] as? [String: Any])?["secondary"])
-        }
-
-        return "topLevel=[\(topLevelKeys)] rateLimits=[\(rateLimitsKeys)] selectedLimit=[\(selectedLimitKeys)] primary=[\(primaryKeys)] secondary=[\(secondaryKeys)]"
-    }
-
-    private static func dictionaryKeys(_ value: Any?) -> String {
-        guard let dictionary = value as? [String: Any] else {
-            return ""
-        }
-        return dictionary.keys.sorted().joined(separator: ",")
-    }
 }

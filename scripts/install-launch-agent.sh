@@ -33,11 +33,13 @@ xml_escape() {
 
 resolve_codex_binary() {
   if [[ -n "${CODEX_BIN:-}" ]]; then
-    if [[ -x "${CODEX_BIN}" ]]; then
-      printf '%s\n' "${CODEX_BIN}"
+    local configured_codex_bin
+    configured_codex_bin="$(expand_path "${CODEX_BIN}")"
+    if [[ -x "${configured_codex_bin}" ]]; then
+      printf '%s\n' "${configured_codex_bin}"
       return
     fi
-    echo "CODEX_BIN is set but is not executable: ${CODEX_BIN}" >&2
+    echo "CODEX_BIN is set but is not executable: ${configured_codex_bin}" >&2
     return 1
   fi
 
@@ -62,6 +64,12 @@ binary_path_xml="$(xml_escape "${binary_path}")"
 codex_binary_xml="$(xml_escape "${codex_binary}")"
 codex_home_xml="$(xml_escape "${codex_home}")"
 app_support_dir_xml="$(xml_escape "${app_support_dir}")"
+
+if [[ ! -d "${codex_home}" ]]; then
+  echo "Warning: Codex home does not exist yet: ${codex_home}. The overlay will wait until Codex creates local state." >&2
+elif [[ ! -f "${codex_home}/.codex-global-state.json" ]]; then
+  echo "Warning: Codex avatar state was not found at ${codex_home}/.codex-global-state.json. The overlay will use the visible window fallback until the pet writes bounds." >&2
+fi
 
 cd "${repo_root}"
 swift build -c release

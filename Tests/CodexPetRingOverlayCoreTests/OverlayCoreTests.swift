@@ -147,6 +147,52 @@ final class OverlayCoreTests: XCTestCase {
         }
     }
 
+    func testParseUsageRingsClampsOutOfRangeUsedPercent() throws {
+        let response: [String: Any] = [
+            "rateLimits": [
+                "primary": [
+                    "windowDurationMins": 300,
+                    "usedPercent": -20,
+                ],
+                "secondary": [
+                    "windowDurationMins": 10_080,
+                    "usedPercent": 120,
+                ],
+            ],
+        ]
+
+        let usage = try RateLimitSnapshotParser.parseUsageRings(from: response, limitID: "codex")
+
+        XCTAssertEqual(usage.shortWindow.usedPercent, 0)
+        XCTAssertEqual(usage.longWindow.usedPercent, 100)
+        XCTAssertEqual(usage.longWindow.usageLevel, .critical)
+    }
+
+    func testRateLimitResponseShapeDescriptionListsKeysWithoutValues() {
+        let response: [String: Any] = [
+            "rateLimitsByLimitId": [
+                "codex": [
+                    "primary": [
+                        "windowDurationMins": 300,
+                        "usedPercent": "sensitive-value",
+                    ],
+                    "secondary": [
+                        "windowDurationMins": 10_080,
+                        "usedPercent": 42,
+                    ],
+                ],
+            ],
+            "account": "sensitive-account",
+        ]
+
+        let description = RateLimitSnapshotParser.responseShapeDescription(response, limitID: "codex")
+
+        XCTAssertTrue(description.contains("topLevel=[account,rateLimitsByLimitId]"))
+        XCTAssertTrue(description.contains("primary=[usedPercent,windowDurationMins]"))
+        XCTAssertFalse(description.contains("sensitive-value"))
+        XCTAssertFalse(description.contains("sensitive-account"))
+    }
+
     func testParseMascotBoundsFromCodexState() throws {
         let data = """
         {
@@ -185,6 +231,18 @@ final class OverlayCoreTests: XCTestCase {
         XCTAssertNil(mascot)
     }
 
+    func testParseMascotBoundsTreatsNullBoundsAsUnavailable() throws {
+        let data = """
+        {
+          "electron-avatar-overlay-bounds": null
+        }
+        """.data(using: .utf8)!
+
+        let mascot = try CodexStateParser.parseMascotBounds(from: data)
+
+        XCTAssertNil(mascot)
+    }
+
     func testSelectAvatarWindowRejectsCodexWindowThatCannotContainMascot() {
         let mascot = MascotBounds(left: 20, top: 18, width: 96, height: 96)
         let windows = [
@@ -205,6 +263,46 @@ final class OverlayCoreTests: XCTestCase {
         let selected = CodexWindowSelector.selectAvatarWindow(from: windows, mascot: mascot)
 
         XCTAssertEqual(selected, CGRect(x: 20, y: 20, width: 160, height: 150))
+    }
+
+    func testSelectAvatarWindowSelectionMarksCorrelatedMascot() throws {
+        let mascot = MascotBounds(left: 20, top: 18, width: 96, height: 96)
+        let windows = [
+            WindowSnapshot(
+                ownerName: "Codex",
+                layer: 3,
+                isOnscreen: true,
+                bounds: CGRect(x: 20, y: 20, width: 160, height: 150)
+            ),
+        ]
+
+        let selection = try XCTUnwrap(CodexWindowSelector.selectAvatarWindowSelection(from: windows, mascot: mascot))
+
+        XCTAssertEqual(selection.bounds, CGRect(x: 20, y: 20, width: 160, height: 150))
+        XCTAssertTrue(selection.isMascotCorrelated)
+    }
+
+    func testSelectAvatarWindowFallsBackWhenStaleMascotFitsNoCandidate() throws {
+        let staleMascot = MascotBounds(left: 500, top: 500, width: 96, height: 96)
+        let windows = [
+            WindowSnapshot(
+                ownerName: "Codex",
+                layer: 3,
+                isOnscreen: true,
+                bounds: CGRect(x: 10, y: 10, width: 220, height: 220)
+            ),
+            WindowSnapshot(
+                ownerName: "Codex",
+                layer: 3,
+                isOnscreen: true,
+                bounds: CGRect(x: 20, y: 20, width: 120, height: 120)
+            ),
+        ]
+
+        let selection = try XCTUnwrap(CodexWindowSelector.selectAvatarWindowSelection(from: windows, mascot: staleMascot))
+
+        XCTAssertEqual(selection.bounds, CGRect(x: 20, y: 20, width: 120, height: 120))
+        XCTAssertFalse(selection.isMascotCorrelated)
     }
 
     func testSelectAvatarWindowFallsBackToSmallestCandidateWithoutMascotBounds() {
@@ -298,5 +396,16 @@ final class OverlayCoreTests: XCTestCase {
         let message = try XCTUnwrap(JSONLineMessageParser.parseObject(from: Data(#"{"id":2,"result":{"ok":true}}"#.utf8)))
 
         XCTAssertEqual(message["id"] as? Int, 2)
+    }
+
+    func testJSONLineProtocolSummaryDoesNotExposeRawValues() {
+        let line = Data(#"{"id":2,"result":{"rateLimits":{"token":"secret-token"}},"method":"account/rateLimits/read"}"#.utf8)
+
+        let summary = JSONLineMessageParser.protocolSummary(from: line)
+
+        XCTAssertTrue(summary.contains("id=2"))
+        XCTAssertTrue(summary.contains("resultKeys=[rateLimits]"))
+        XCTAssertFalse(summary.contains("secret-token"))
+        XCTAssertFalse(summary.contains("account/rateLimits/read"))
     }
 }

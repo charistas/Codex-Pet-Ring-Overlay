@@ -151,6 +151,32 @@ public enum JSONLineMessageParser {
 
         return message
     }
+
+    public static func protocolSummary(from lineData: Data) -> String {
+        guard let message = parseObject(from: lineData) else {
+            return "non-json output (\(lineData.count) bytes)"
+        }
+
+        var components: [String] = []
+        if
+            let id = NumericValueParser.optionalDouble(message["id"]),
+            id.rounded() == id
+        {
+            components.append("id=\(Int(id))")
+        }
+
+        components.append("keys=[\(message.keys.sorted().joined(separator: ","))]")
+
+        if let result = message["result"] as? [String: Any] {
+            components.append("resultKeys=[\(result.keys.sorted().joined(separator: ","))]")
+        }
+
+        if message.keys.contains("error") {
+            components.append("hasError=true")
+        }
+
+        return components.isEmpty ? "json message" : components.joined(separator: " ")
+    }
 }
 
 public enum RateLimitSnapshotParser {
@@ -196,6 +222,36 @@ public enum RateLimitSnapshotParser {
             windowDurationMinutes: duration
         )
     }
+
+    public static func responseShapeDescription(_ result: [String: Any], limitID: String) -> String {
+        let topLevelKeys = result.keys.sorted().joined(separator: ",")
+        let rateLimitsKeys = dictionaryKeys(result["rateLimits"])
+        let selectedLimitKeys: String
+        let primaryKeys: String
+        let secondaryKeys: String
+
+        if
+            let byLimitID = result["rateLimitsByLimitId"] as? [String: Any],
+            let selectedLimit = byLimitID[limitID] as? [String: Any]
+        {
+            selectedLimitKeys = selectedLimit.keys.sorted().joined(separator: ",")
+            primaryKeys = dictionaryKeys(selectedLimit["primary"])
+            secondaryKeys = dictionaryKeys(selectedLimit["secondary"])
+        } else {
+            selectedLimitKeys = ""
+            primaryKeys = dictionaryKeys((result["rateLimits"] as? [String: Any])?["primary"])
+            secondaryKeys = dictionaryKeys((result["rateLimits"] as? [String: Any])?["secondary"])
+        }
+
+        return "topLevel=[\(topLevelKeys)] rateLimits=[\(rateLimitsKeys)] selectedLimit=[\(selectedLimitKeys)] primary=[\(primaryKeys)] secondary=[\(secondaryKeys)]"
+    }
+
+    private static func dictionaryKeys(_ value: Any?) -> String {
+        guard let dictionary = value as? [String: Any] else {
+            return ""
+        }
+        return dictionary.keys.sorted().joined(separator: ",")
+    }
 }
 
 private struct AvatarOverlayBounds: Decodable {
@@ -206,6 +262,9 @@ public enum CodexStateParser {
     public static func parseMascotBounds(from data: Data) throws -> MascotBounds? {
         let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         guard let boundsObject = object?["electron-avatar-overlay-bounds"] else {
+            return nil
+        }
+        guard let boundsObject = boundsObject as? [String: Any] else {
             return nil
         }
         let boundsData = try JSONSerialization.data(withJSONObject: boundsObject)
@@ -229,17 +288,42 @@ public struct WindowSnapshot: Equatable {
     }
 }
 
+public struct AvatarWindowSelection: Equatable {
+    public let bounds: CGRect
+    public let isMascotCorrelated: Bool
+
+    public init(bounds: CGRect, isMascotCorrelated: Bool) {
+        self.bounds = bounds
+        self.isMascotCorrelated = isMascotCorrelated
+    }
+}
+
 public enum CodexWindowSelector {
     public static func selectAvatarWindow(from windows: [WindowSnapshot], mascot: MascotBounds?) -> CGRect? {
+        selectAvatarWindowSelection(from: windows, mascot: mascot)?.bounds
+    }
+
+    public static func selectAvatarWindowSelection(from windows: [WindowSnapshot], mascot: MascotBounds?) -> AvatarWindowSelection? {
         let candidates = windows.filter(isCodexAvatarCandidate)
-        let correlatedCandidates = candidates.filter { candidate in
-            guard let mascot, mascot.hasFinitePositiveSize else { return true }
-            return candidateCanContain(mascot: mascot, in: candidate.bounds)
+        guard !candidates.isEmpty else {
+            return nil
         }
 
-        return correlatedCandidates
-            .min { candidateScore($0.bounds, mascot: mascot) < candidateScore($1.bounds, mascot: mascot) }?
-            .bounds
+        if let mascot, mascot.hasFinitePositiveSize {
+            let correlatedCandidates = candidates.filter { candidate in
+                candidateCanContain(mascot: mascot, in: candidate.bounds)
+            }
+
+            if let selected = correlatedCandidates.min(by: {
+                candidateScore($0.bounds, mascot: mascot) < candidateScore($1.bounds, mascot: mascot)
+            }) {
+                return AvatarWindowSelection(bounds: selected.bounds, isMascotCorrelated: true)
+            }
+        }
+
+        return candidates
+            .min { candidateScore($0.bounds, mascot: nil) < candidateScore($1.bounds, mascot: nil) }
+            .map { AvatarWindowSelection(bounds: $0.bounds, isMascotCorrelated: false) }
     }
 
     private static func isCodexAvatarCandidate(_ window: WindowSnapshot) -> Bool {

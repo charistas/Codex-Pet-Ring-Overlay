@@ -86,7 +86,22 @@ final class RingView: NSView {
         static let radiusGap: CGFloat = 13
     }
 
-    private let animatesChanges: Bool
+    var animatesChanges: Bool {
+        didSet {
+            guard oldValue != animatesChanges else { return }
+            if !animatesChanges {
+                if let usage {
+                    displayedShortPercent = usage.shortWindow.ringPercent
+                    displayedLongPercent = usage.longWindow.ringPercent
+                }
+                animationStartedAt = nil
+            } else if usage == nil {
+                loadingStartedAt = Date()
+            }
+            needsDisplay = true
+            updateAnimationTimer()
+        }
+    }
     private var animationTimer: Timer?
     private var loadingStartedAt = Date()
     private var animationStartedAt: Date?
@@ -224,6 +239,7 @@ final class RingView: NSView {
 
     private var needsLiveRedraw: Bool {
         guard isLiveDisplayEnabled else { return false }
+        guard animatesChanges else { return false }
         if animationStartedAt != nil {
             return true
         }
@@ -266,6 +282,7 @@ final class RingView: NSView {
 
     private func loadingTrackOpacity() -> CGFloat {
         guard usage == nil else { return 1 }
+        guard animatesChanges else { return 0.78 }
         let elapsed = Date().timeIntervalSince(loadingStartedAt)
         let phase = (sin(elapsed * 2.2) + 1) / 2
         return CGFloat(0.62 + phase * 0.38)
@@ -365,6 +382,7 @@ final class RingView: NSView {
     }
 
     private func criticalPulse() -> CGFloat {
+        guard animatesChanges else { return 0 }
         let phase = (sin(Date().timeIntervalSinceReferenceDate * 3.0) + 1) / 2
         return CGFloat(phase)
     }

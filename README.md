@@ -9,7 +9,7 @@ It depends on undocumented local Codex state and rate-limit behavior, so it may 
 - Blue/green: normal usage
 - Yellow: high usage
 - Red: near or at limit
-- Usage changes animate smoothly instead of jumping between refreshes unless macOS Reduce Motion is enabled
+- Usage changes, loading pulses, and critical pulses animate smoothly unless macOS Reduce Motion is enabled
 - Subtle halo strokes and loading pulses keep the rings readable on varied desktop backgrounds
 - Stale usage data dims after repeated refresh failures instead of continuing to look current
 - Extra ring padding and a thinner inner ring leave room for Codex's own pet badges
@@ -42,14 +42,14 @@ The app runs as a separate transparent, borderless, mouse-pass-through macOS win
 
 1. Finds the visible Codex avatar overlay window using public macOS window metadata.
 2. Reads Codex's persisted avatar overlay bounds from `~/.codex/.codex-global-state.json`.
-3. Aligns its own transparent window around the pet's mascot rectangle, falling back to the visible overlay window during brief local state-file gaps.
+3. Aligns its own transparent window around the pet's mascot rectangle, falling back to the visible overlay window during brief local state-file gaps or stale bounds that no longer fit the visible Codex window.
 4. Asks the local Codex CLI/app-server for rate-limit status on an adaptive schedule.
 5. Draws the 5-hour and weekly rings from the returned usage percentages, with animated changes, contrast halos, severity thickness, and critical pulses.
 6. Hides itself when the Codex avatar overlay window is not visible.
 
 ## Privacy
 
-The overlay itself does not send telemetry, read chat transcripts, or make direct third-party network requests. It reads local Codex avatar-position state and asks the local Codex CLI/app-server for rate-limit status. That Codex-owned process may communicate with OpenAI according to Codex's normal behavior. Overlay logs stay on the local machine.
+The overlay itself does not send telemetry, read chat transcripts, or make direct third-party network requests. It reads local Codex avatar-position state and asks the local Codex CLI/app-server for rate-limit status. That Codex-owned process may communicate with OpenAI according to Codex's normal behavior. Overlay logs stay on the local machine, and rate-limit protocol diagnostics summarize response keys instead of logging raw app-server stdout.
 
 ## Build
 
@@ -74,7 +74,7 @@ swift run codex-pet-ring-overlay
 
 ## Install As A User LaunchAgent
 
-The install script builds the release binary, copies it under `~/Library/Application Support/Codex Pet Ring Overlay`, resolves the Codex CLI binary, and loads a per-user LaunchAgent. `CODEX_HOME` is only used to tell the overlay where to read Codex's local state.
+The install script builds the release binary, copies it under `~/Library/Application Support/Codex Pet Ring Overlay`, resolves the Codex CLI binary, warns if Codex local state is not present yet, and loads a per-user LaunchAgent. `CODEX_HOME` is only used to tell the overlay where to read Codex's local state.
 
 ```bash
 ./scripts/install-launch-agent.sh
@@ -121,8 +121,8 @@ Supported options:
 ## Troubleshooting
 
 - No rings appear: confirm Codex Desktop is running and the floating pet overlay is visible. In Codex settings, go to Appearance > Pets, or use `/pet` in the composer.
-- `Codex binary not found`: install Codex Desktop in `/Applications`, put `codex` on `PATH`, or run with `--codex-bin PATH`.
-- Rings are misplaced: Codex's local avatar bounds format or macOS display geometry may have changed, or the app may be using the temporary whole-window fallback while bounds are unavailable. Check the logs listed above.
+- `Codex binary not found or not executable`: install Codex Desktop in `/Applications`, put `codex` on `PATH`, or run with `--codex-bin PATH`.
+- Rings are misplaced: Codex's local avatar bounds format or macOS display geometry may have changed, or the app may be using the temporary whole-window fallback while bounds are unavailable or stale. Check the logs listed above.
 - Usage does not update: the undocumented local rate-limit method may have changed. The overlay refreshes immediately when the pet appears, about every 60 seconds while visible and healthy, and backs off while hidden or after failures. Last-known usage dims once it is stale. Check `overlay.err.log`.
 - LaunchAgent status: run `launchctl print gui/$(id -u)/com.charistas.codex-pet-ring-overlay`.
 
